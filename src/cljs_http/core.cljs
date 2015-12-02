@@ -43,16 +43,23 @@
 
 (defn build-xhr
   "Builds an XhrIo object from the request parameters."
-  [{:keys [with-credentials? default-headers response-type] :as request}]
+  [{:keys [with-credentials? default-headers response-type event-ch] :as request}]
   (let [timeout (or (:timeout request) 0)
         send-credentials (if (nil? with-credentials?)
                            true
-                           with-credentials?)]
-    (doto (XhrIo.)
-          (apply-default-headers! default-headers)
-          (apply-response-type! response-type)
-          (.setTimeoutInterval timeout)
-          (.setWithCredentials send-credentials))))
+                           with-credentials?)
+        xhr-obj (XhrIo.)]
+
+    (doto xhr-obj
+      (apply-default-headers! default-headers)
+      (apply-response-type! response-type)
+      (.setTimeoutInterval timeout)
+      (.setWithCredentials send-credentials))
+
+    (when event-ch
+      (.setProgressEventsEnabled xhr-obj true))
+
+    xhr-obj))
 
 ;; goog.net.ErrorCode constants to CLJS keywords
 (def error-kw
@@ -70,13 +77,15 @@
 (defn xhr
   "Execute the HTTP request corresponding to the given Ring request
   map and return a core.async channel."
-  [{:keys [request-method headers body with-credentials? cancel] :as request}]
+  [{:keys [request-method headers body with-credentials? cancel event-ch] :as request}]
   (let [channel (async/chan)
         request-url (util/build-url request)
         method (name (or request-method :get))
         headers (util/build-headers headers)
         xhr (build-xhr request)]
     (swap! pending-requests assoc channel xhr)
+    (when event-ch
+      (.listen xhr EventType.PROGRESS #(async/put! event-ch %)))
     (.listen xhr EventType.COMPLETE
              (fn [evt]
                (let [target (.-target evt)
